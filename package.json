@@ -1,0 +1,14 @@
+{
+  "name": "transfer-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal Phone <-> PC personal file transfer utility",
+  "scripts": {
+    "dev": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "start": "npm --prefix web run start",
+    "lint": "npm --prefix web run lint",
+    "typecheck": "npm --prefix web run typecheck",
+    "test": "npm --prefix web run test"
+  }
+}
