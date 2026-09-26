@@ -26,6 +26,7 @@ jobs:
         run: |
           cd ios
           xcodegen generate --spec project.yml
+          sed -i '' 's/objectVersion = 77;/objectVersion = 56;/g' TransferApp.xcodeproj/project.pbxproj
 
       - name: Install Apple Certificate and Provisioning Profile
         env:
