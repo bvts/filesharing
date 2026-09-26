@@ -3,13 +3,17 @@ import Foundation
 public final class TransferApiClient {
     public static let shared = TransferApiClient()
 
+    private var sharedDefaults: UserDefaults {
+        UserDefaults(suiteName: "group.com.transfer.app") ?? .standard
+    }
+
     // Configurable endpoint (defaults to production or localhost)
     public var baseUrl: String {
         get {
-            UserDefaults(suiteName: "group.com.transfer.app")?.string(forKey: "server_url") ?? "http://localhost:3000"
+            sharedDefaults.string(forKey: "server_url") ?? "http://localhost:3000"
         }
         set {
-            UserDefaults(suiteName: "group.com.transfer.app")?.set(newValue, forKey: "server_url")
+            sharedDefaults.set(newValue, forKey: "server_url")
         }
     }
 
@@ -28,10 +32,10 @@ public final class TransferApiClient {
 
     public var deviceId: String? {
         get {
-            UserDefaults(suiteName: "group.com.transfer.app")?.string(forKey: "device_id")
+            sharedDefaults.string(forKey: "device_id")
         }
         set {
-            UserDefaults(suiteName: "group.com.transfer.app")?.set(newValue, forKey: "device_id")
+            sharedDefaults.set(newValue, forKey: "device_id")
         }
     }
 

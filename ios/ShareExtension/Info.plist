@@ -9,7 +9,7 @@
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
-    <string>com.transfer.app.ShareExtension</string>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -26,13 +26,16 @@
         <dict>
             <key>NSExtensionActivationRule</key>
             <dict>
-                <!-- Supports images, videos, audio, pdfs, and generic files -->
                 <key>NSExtensionActivationSupportsFileWithMaxCount</key>
                 <integer>20</integer>
                 <key>NSExtensionActivationSupportsImageWithMaxCount</key>
                 <integer>20</integer>
                 <key>NSExtensionActivationSupportsMovieWithMaxCount</key>
                 <integer>10</integer>
+                <key>NSExtensionActivationSupportsText</key>
+                <true/>
+                <key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
+                <integer>1</integer>
             </dict>
         </dict>
         <key>NSExtensionPrincipalClass</key>

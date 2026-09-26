@@ -2,6 +2,7 @@ import UIKit
 import Social
 import UniformTypeIdentifiers
 
+@objc(ShareViewController)
 class ShareViewController: UIViewController {
     private let statusLabel = UILabel()
     private let activityIndicator = UIActivityIndicatorView(style: .medium)

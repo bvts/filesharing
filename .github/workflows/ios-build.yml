@@ -92,6 +92,18 @@ jobs:
             echo "Packaging unsigned IPA payload..."
             mkdir -p build/payload_temp/Payload
             cp -r build/TransferApp.xcarchive/Products/Applications/TransferApp.app build/payload_temp/Payload/
+
+            echo "Verifying ShareExtension.appex Info.plist..."
+            SHARE_PLIST="build/payload_temp/Payload/TransferApp.app/PlugIns/ShareExtension.appex/Info.plist"
+            if [ -f "$SHARE_PLIST" ]; then
+              plutil -p "$SHARE_PLIST"
+              plutil -p "$SHARE_PLIST" | grep -q "NSExtension" || { echo "::error ::NSExtension dictionary is missing from $SHARE_PLIST"; exit 1; }
+              echo "ShareExtension Info.plist verified successfully with NSExtension dictionary."
+            else
+              echo "::error ::ShareExtension.appex/Info.plist not found at $SHARE_PLIST!"
+              exit 1
+            fi
+
             cd build/payload_temp
             zip -qr ../out/TransferApp.ipa Payload
             cd ../..
