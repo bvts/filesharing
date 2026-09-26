@@ -74,18 +74,30 @@ jobs:
           </plist>
           EOF
 
-      - name: Build Archive or Simulator
+      - name: Build Archive
         run: |
           cd ios
+          mkdir -p build/out
           if [ -z "${{ secrets.BUILD_CERTIFICATE_BASE64 }}" ]; then
-            echo "Building unsigned simulator build..."
-            xcodebuild build \
+            echo "No signing secrets provided. Building unsigned release archive..."
+            xcodebuild archive \
               -project TransferApp.xcodeproj \
               -scheme TransferApp \
-              -destination 'generic/platform=iOS Simulator' \
-              CODE_SIGNING_ALLOWED=NO
+              -archivePath build/TransferApp.xcarchive \
+              -destination 'generic/platform=iOS' \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY=""
+
+            echo "Packaging unsigned IPA payload..."
+            mkdir -p build/payload_temp/Payload
+            cp -r build/TransferApp.xcarchive/Products/Applications/TransferApp.app build/payload_temp/Payload/
+            cd build/payload_temp
+            zip -qr ../out/TransferApp.ipa Payload
+            cd ../..
+            rm -rf build/payload_temp
           else
-            echo "Building signed archive for IPA export..."
+            echo "Building signed archive with Apple credentials..."
             xcodebuild archive \
               -project TransferApp.xcodeproj \
               -scheme TransferApp \
@@ -93,25 +105,20 @@ jobs:
               -destination 'generic/platform=iOS' \
               PROVISIONING_PROFILE_SPECIFIER="" \
               CODE_SIGNING_ALLOWED=YES
-          fi
 
-      - name: Export IPA
-        if: env.BUILD_CERTIFICATE_BASE64 != ''
-        env:
-          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-        run: |
-          cd ios
-          xcodebuild -exportArchive \
-            -archivePath build/TransferApp.xcarchive \
-            -exportOptionsPlist ExportOptions.plist \
-            -exportPath build/out
+            echo "Exporting signed IPA..."
+            xcodebuild -exportArchive \
+              -archivePath build/TransferApp.xcarchive \
+              -exportOptionsPlist ExportOptions.plist \
+              -exportPath build/out
+          fi
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: TransferApp-IPA
           path: ios/build/out/*.ipa
-          if-no-files-found: ignore
+          if-no-files-found: error
 
       - name: Clean up keychain
         if: always()
