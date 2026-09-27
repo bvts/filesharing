@@ -3,43 +3,63 @@ import Security
 
 public enum KeychainHelper {
     private static let service = "com.transfer.app.keychain"
-    private static let accessGroup: String? = "group.com.transfer.app"
+    private static let accessGroup = "group.com.transfer.app"
 
     public static func save(key: String, data: Data) -> Bool {
-        let query: [String: Any] = [
+        // Try with accessGroup first
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessGroup as String: accessGroup
         ]
 
         SecItemDelete(query as CFDictionary)
-        let status = SecItemAdd(query as CFDictionary, nil)
+        var status = SecItemAdd(query as CFDictionary, nil)
+        if status == errSecSuccess { return true }
+
+        // Fallback without accessGroup
+        query.removeValue(forKey: kSecAttrAccessGroup as String)
+        SecItemDelete(query as CFDictionary)
+        status = SecItemAdd(query as CFDictionary, nil)
         return status == errSecSuccess
     }
 
     public static func load(key: String) -> Data? {
-        let query: [String: Any] = [
+        // Try with accessGroup
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecAttrAccessGroup as String: accessGroup
         ]
 
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return data
+        var status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecSuccess, let data = item as? Data { return data }
+
+        // Fallback without accessGroup
+        query.removeValue(forKey: kSecAttrAccessGroup as String)
+        status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecSuccess, let data = item as? Data { return data }
+
+        return nil
     }
 
     public static func delete(key: String) {
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key
+            kSecAttrAccount as String: key,
+            kSecAttrAccessGroup as String: accessGroup
         ]
+        SecItemDelete(query as CFDictionary)
+
+        query.removeValue(forKey: kSecAttrAccessGroup as String)
         SecItemDelete(query as CFDictionary)
     }
 

@@ -3,39 +3,89 @@ import Foundation
 public final class TransferApiClient {
     public static let shared = TransferApiClient()
 
-    private var sharedDefaults: UserDefaults {
-        UserDefaults(suiteName: "group.com.transfer.app") ?? .standard
+    private var appGroupDefaults: UserDefaults? {
+        UserDefaults(suiteName: "group.com.transfer.app")
     }
 
-    // Configurable endpoint (defaults to production or localhost)
+    private var sharedContainerUrl: URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.transfer.app")
+    }
+
+    // Configurable endpoint
     public var baseUrl: String {
         get {
-            sharedDefaults.string(forKey: "server_url") ?? "http://localhost:3000"
+            if let groupVal = appGroupDefaults?.string(forKey: "server_url"), !groupVal.isEmpty {
+                return groupVal
+            }
+            if let containerFile = sharedContainerUrl?.appendingPathComponent("server_url.txt"),
+               let saved = try? String(contentsOf: containerFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
+                return saved
+            }
+            return UserDefaults.standard.string(forKey: "server_url") ?? "http://localhost:3000"
         }
         set {
-            sharedDefaults.set(newValue, forKey: "server_url")
+            appGroupDefaults?.set(newValue, forKey: "server_url")
+            UserDefaults.standard.set(newValue, forKey: "server_url")
+            if let containerFile = sharedContainerUrl?.appendingPathComponent("server_url.txt") {
+                try? newValue.write(to: containerFile, atomically: true, encoding: .utf8)
+            }
         }
     }
 
     public var authToken: String? {
         get {
-            KeychainHelper.loadString(key: "auth_token")
+            if let token = KeychainHelper.loadString(key: "auth_token"), !token.isEmpty {
+                return token
+            }
+            if let groupToken = appGroupDefaults?.string(forKey: "auth_token"), !groupToken.isEmpty {
+                return groupToken
+            }
+            if let containerFile = sharedContainerUrl?.appendingPathComponent("auth_token.txt"),
+               let saved = try? String(contentsOf: containerFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
+                return saved
+            }
+            return UserDefaults.standard.string(forKey: "auth_token")
         }
         set {
             if let token = newValue {
                 _ = KeychainHelper.saveString(key: "auth_token", value: token)
+                appGroupDefaults?.set(token, forKey: "auth_token")
+                UserDefaults.standard.set(token, forKey: "auth_token")
+                if let containerFile = sharedContainerUrl?.appendingPathComponent("auth_token.txt") {
+                    try? token.write(to: containerFile, atomically: true, encoding: .utf8)
+                }
             } else {
                 KeychainHelper.delete(key: "auth_token")
+                appGroupDefaults?.removeObject(forKey: "auth_token")
+                UserDefaults.standard.removeObject(forKey: "auth_token")
+                if let containerFile = sharedContainerUrl?.appendingPathComponent("auth_token.txt") {
+                    try? FileManager.default.removeItem(at: containerFile)
+                }
             }
         }
     }
 
     public var deviceId: String? {
         get {
-            sharedDefaults.string(forKey: "device_id")
+            if let groupDev = appGroupDefaults?.string(forKey: "device_id"), !groupDev.isEmpty {
+                return groupDev
+            }
+            if let containerFile = sharedContainerUrl?.appendingPathComponent("device_id.txt"),
+               let saved = try? String(contentsOf: containerFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
+                return saved
+            }
+            return UserDefaults.standard.string(forKey: "device_id")
         }
         set {
-            sharedDefaults.set(newValue, forKey: "device_id")
+            appGroupDefaults?.set(newValue, forKey: "device_id")
+            UserDefaults.standard.set(newValue, forKey: "device_id")
+            if let containerFile = sharedContainerUrl?.appendingPathComponent("device_id.txt") {
+                if let val = newValue {
+                    try? val.write(to: containerFile, atomically: true, encoding: .utf8)
+                } else {
+                    try? FileManager.default.removeItem(at: containerFile)
+                }
+            }
         }
     }
 
@@ -96,7 +146,7 @@ public final class TransferApiClient {
         }
 
         guard let url = URL(string: "\(baseUrl)/api/transfers") else {
-            throw NSError(domain: "TransferApp", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid server URL"])
+            throw NSError(domain: "TransferApp", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid server URL: \(baseUrl)"])
         }
 
         let boundary = "Boundary-\(UUID().uuidString)"
@@ -125,7 +175,7 @@ public final class TransferApiClient {
 
         let (data, response) = try await URLSession.shared.upload(for: request, from: body)
         guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw NSError(domain: "TransferApp", code: 500, userInfo: [NSLocalizedDescriptionKey: "Upload failed"])
+            throw NSError(domain: "TransferApp", code: 500, userInfo: [NSLocalizedDescriptionKey: "Upload failed with HTTP status \((response as? HTTPURLResponse)?.statusCode ?? 0)"])
         }
 
         struct UploadResponse: Codable {

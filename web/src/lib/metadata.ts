@@ -8,7 +8,7 @@ const META_STORE_PATH = 'metadata/state.json';
 
 interface DatabaseState {
   devices: Record<string, DeviceSession>;
-  pairCodes: Record<string, { deviceId: string; expiresAt: number }>;
+  pairCodes: Record<string, { deviceId: string; expiresAt: number; claimed?: boolean }>;
   transfers: Record<string, TransferMetadata>;
 }
 
@@ -97,8 +97,23 @@ export async function registerPairCode(code: string, deviceId: string, ttlSecond
   state.pairCodes[code] = {
     deviceId,
     expiresAt: Date.now() + ttlSeconds * 1000,
+    claimed: false,
   };
   await saveState();
+}
+
+export async function checkPairCodeStatus(code: string): Promise<{ claimed: boolean; deviceId: string | null }> {
+  const state = await loadState();
+  const entry = state.pairCodes[code];
+  if (!entry) return { claimed: false, deviceId: null };
+
+  if (Date.now() > entry.expiresAt) {
+    delete state.pairCodes[code];
+    await saveState();
+    return { claimed: false, deviceId: null };
+  }
+
+  return { claimed: Boolean(entry.claimed), deviceId: entry.deviceId };
 }
 
 export async function consumePairCode(code: string): Promise<string | null> {
@@ -112,8 +127,13 @@ export async function consumePairCode(code: string): Promise<string | null> {
     return null;
   }
 
+  if (entry.claimed) {
+    return null;
+  }
+
   const deviceId = entry.deviceId;
-  delete state.pairCodes[code];
+  entry.claimed = true;
+  entry.expiresAt = Date.now() + 60 * 1000; // retain briefly so polling detects it
 
   if (!state.devices[deviceId]) {
     state.devices[deviceId] = {
@@ -122,6 +142,8 @@ export async function consumePairCode(code: string): Promise<string | null> {
       pairedAt: new Date().toISOString(),
       lastActiveAt: new Date().toISOString(),
     };
+  } else {
+    state.devices[deviceId].lastActiveAt = new Date().toISOString();
   }
 
   await saveState();

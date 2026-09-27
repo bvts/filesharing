@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var fromPc: [TransferItem] = []
@@ -9,6 +11,15 @@ struct ContentView: View {
     @State private var showSettings: Bool = false
     @State private var errorMessage: String?
     @State private var activeShareSheetUrl: URL?
+
+    // In-app upload states
+    @State private var selectedPhotoItem: PhotosPickerItem? = nil
+    @State private var showFilePicker: Bool = false
+    @State private var isUploading: Bool = false
+    @State private var uploadStatusText: String? = nil
+
+    // Auto-polling timer
+    @State private var pollTimer: Timer? = nil
 
     var body: some View {
         NavigationStack {
@@ -39,8 +50,22 @@ struct ContentView: View {
             .sheet(item: $activeShareSheetUrl) { url in
                 ShareActivityView(activityItems: [url])
             }
+            .fileImporter(
+                isPresented: $showFilePicker,
+                allowedContentTypes: [.item],
+                allowsMultipleSelection: false
+            ) { result in
+                handleFileSelection(result)
+            }
+            .onChange(of: selectedPhotoItem) { newItem in
+                handlePhotoSelection(newItem)
+            }
             .onAppear {
                 checkPairing()
+                startPolling()
+            }
+            .onDisappear {
+                stopPolling()
             }
         }
     }
@@ -106,7 +131,7 @@ struct ContentView: View {
 
                     Spacer()
 
-                    Button(action: refresh) {
+                    Button(action: { refresh(silent: false) }) {
                         Text(isRefreshing ? "SYNCING..." : "REFRESH")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(.gray)
@@ -114,6 +139,53 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
+
+                // Upload Actions Section
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("SEND TO PC")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.gray)
+                        .padding(.horizontal, 16)
+
+                    HStack(spacing: 12) {
+                        PhotosPicker(selection: $selectedPhotoItem, matching: .any(of: [.images, .videos])) {
+                            HStack {
+                                Image(systemName: "photo")
+                                Text("PHOTO / VIDEO")
+                            }
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundColor(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.white)
+                            .cornerRadius(2)
+                        }
+                        .disabled(isUploading)
+
+                        Button(action: { showFilePicker = true }) {
+                            HStack {
+                                Image(systemName: "doc")
+                                Text("ANY FILE")
+                            }
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color(red: 0.12, green: 0.12, blue: 0.12))
+                            .overlay(Rectangle().stroke(Color.gray.opacity(0.3), lineWidth: 1))
+                            .cornerRadius(2)
+                        }
+                        .disabled(isUploading)
+                    }
+                    .padding(.horizontal, 16)
+
+                    if let status = uploadStatusText {
+                        Text(status)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(isUploading ? .yellow : .green)
+                            .padding(.horizontal, 16)
+                    }
+                }
 
                 // Section 1: INCOMING (From PC)
                 VStack(alignment: .leading, spacing: 8) {
@@ -150,7 +222,7 @@ struct ContentView: View {
             .padding(.bottom, 32)
         }
         .refreshable {
-            refresh()
+            refresh(silent: false)
         }
     }
 
@@ -211,10 +283,24 @@ struct ContentView: View {
     private func checkPairing() {
         if TransferApiClient.shared.authToken != nil {
             isPaired = true
-            refresh()
+            refresh(silent: false)
         } else {
             isPaired = false
         }
+    }
+
+    private func startPolling() {
+        stopPolling()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+            if isPaired {
+                refresh(silent: true)
+            }
+        }
+    }
+
+    private func stopPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
     }
 
     private func pairWithCode() {
@@ -238,7 +324,7 @@ struct ContentView: View {
                     TransferApiClient.shared.authToken = res.authToken
                     await MainActor.run {
                         isPaired = true
-                        refresh()
+                        refresh(silent: false)
                     }
                 } else {
                     await MainActor.run {
@@ -253,28 +339,122 @@ struct ContentView: View {
         }
     }
 
-    private func refresh() {
-        isRefreshing = true
+    private func refresh(silent: Bool = false) {
+        if !silent { isRefreshing = true }
         Task {
             do {
                 let res = try await TransferApiClient.shared.fetchTransfers()
                 await MainActor.run {
                     fromPc = res.fromPc
                     fromPhone = res.fromPhone
-                    isRefreshing = false
+                    if !silent { isRefreshing = false }
                 }
             } catch {
                 await MainActor.run {
-                    isRefreshing = false
+                    if !silent { isRefreshing = false }
                 }
             }
+        }
+    }
+
+    private func handlePhotoSelection(_ item: PhotosPickerItem?) {
+        guard let item = item else { return }
+        isUploading = true
+        uploadStatusText = "PREPARING PHOTO..."
+
+        Task {
+            do {
+                if let data = try await item.loadTransferable(type: Data.self) {
+                    let filename = "photo_\(Int(Date().timeIntervalSince1970)).jpg"
+                    let tempUrl = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+                    try data.write(to: tempUrl)
+
+                    await MainActor.run { uploadStatusText = "UPLOADING TO PC..." }
+
+                    _ = try await TransferApiClient.shared.uploadFile(
+                        fileUrl: tempUrl,
+                        filename: filename,
+                        mimeType: "image/jpeg",
+                        direction: "phone_to_pc"
+                    )
+
+                    await MainActor.run {
+                        uploadStatusText = "UPLOADED TO PC"
+                        isUploading = false
+                        selectedPhotoItem = nil
+                        refresh(silent: true)
+                    }
+
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        uploadStatusText = nil
+                    }
+                } else {
+                    await MainActor.run {
+                        uploadStatusText = "Failed to load photo"
+                        isUploading = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    uploadStatusText = "Upload error: \(error.localizedDescription)"
+                    isUploading = false
+                }
+            }
+        }
+    }
+
+    private func handleFileSelection(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            isUploading = true
+            uploadStatusText = "UPLOADING TO PC..."
+
+            let didAccess = url.startAccessingSecurityScopedResource()
+            defer {
+                if didAccess { url.stopAccessingSecurityScopedResource() }
+            }
+
+            Task {
+                do {
+                    let tempUrl = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+                    try? FileManager.default.removeItem(at: tempUrl)
+                    try FileManager.default.copyItem(at: url, to: tempUrl)
+
+                    let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+
+                    _ = try await TransferApiClient.shared.uploadFile(
+                        fileUrl: tempUrl,
+                        filename: url.lastPathComponent,
+                        mimeType: mime,
+                        direction: "phone_to_pc"
+                    )
+
+                    await MainActor.run {
+                        uploadStatusText = "SENT TO PC"
+                        isUploading = false
+                        refresh(silent: true)
+                    }
+
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        uploadStatusText = nil
+                    }
+                } catch {
+                    await MainActor.run {
+                        uploadStatusText = "Upload error: \(error.localizedDescription)"
+                        isUploading = false
+                    }
+                }
+            }
+        case .failure(let error):
+            uploadStatusText = "File selection failed: \(error.localizedDescription)"
         }
     }
 
     private func deleteItem(_ item: TransferItem) {
         Task {
             try? await TransferApiClient.shared.deleteTransfer(id: item.id)
-            refresh()
+            refresh(silent: true)
         }
     }
 

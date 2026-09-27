@@ -1,0 +1,41 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { COOKIE_AUTH_NAME, signDeviceToken } from '@/lib/crypto';
+import { checkPairCodeStatus } from '@/lib/metadata';
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const code = searchParams.get('code');
+
+  if (!code) {
+    return NextResponse.json({ error: 'Code parameter is required' }, { status: 400 });
+  }
+
+  const cleanCode = code.trim();
+  const status = await checkPairCodeStatus(cleanCode);
+
+  if (status.claimed && status.deviceId) {
+    const authToken = signDeviceToken(status.deviceId);
+    const response = NextResponse.json({
+      paired: true,
+      deviceId: status.deviceId,
+      authToken,
+    });
+
+    response.cookies.set({
+      name: COOKIE_AUTH_NAME,
+      value: authToken,
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 365 * 24 * 60 * 60,
+    });
+
+    return response;
+  }
+
+  return NextResponse.json({
+    paired: false,
+    valid: Boolean(status.deviceId),
+  });
+}

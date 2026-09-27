@@ -60,6 +60,49 @@ export default function TransferPage() {
     return () => clearInterval(timer);
   }, []);
 
+  // Poll pairing status when on pairing screen
+  useEffect(() => {
+    if (paired !== false || !pairCode) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/pair/poll?code=${encodeURIComponent(pairCode)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.paired) {
+            clearInterval(interval);
+            setPaired(true);
+            setDeviceId(data.deviceId);
+            fetchTransfers();
+          }
+        }
+      } catch {}
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [paired, pairCode]);
+
+  // Poll for incoming transfers and sync in real time when paired
+  useEffect(() => {
+    if (!paired) return;
+
+    const interval = setInterval(() => {
+      fetchTransfers(true);
+    }, 3000);
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        fetchTransfers(true);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [paired]);
+
   // Check URL searchParams for quick pairing ?pair=123456
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

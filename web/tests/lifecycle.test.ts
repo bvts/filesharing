@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import {
   registerPairCode,
   consumePairCode,
+  checkPairCodeStatus,
   addTransfer,
   getTransfer,
   deleteTransfer,
@@ -11,13 +12,23 @@ import {
 } from '../src/lib/metadata';
 
 describe('Transfer Lifecycle & Expiration Suite', () => {
-  it('registers and consumes a pairing code once', async () => {
+  it('registers, checks status, and consumes a pairing code once', async () => {
     const code = '789123';
     const deviceId = 'dev_test_phone_001';
 
     await registerPairCode(code, deviceId, 60);
+
+    const initialStatus = await checkPairCodeStatus(code);
+    assert.strictEqual(initialStatus.claimed, false);
+    assert.strictEqual(initialStatus.deviceId, deviceId);
+
     const consumedFirst = await consumePairCode(code);
     assert.strictEqual(consumedFirst, deviceId);
+
+    // After consumption, checkPairCodeStatus should report claimed = true
+    const postConsumeStatus = await checkPairCodeStatus(code);
+    assert.strictEqual(postConsumeStatus.claimed, true);
+    assert.strictEqual(postConsumeStatus.deviceId, deviceId);
 
     // Second consumption must fail (single-use)
     const consumedSecond = await consumePairCode(code);
