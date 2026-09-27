@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { generatePairCode, generateSecureId, signDeviceToken } from '@/lib/crypto';
+import { generatePairCode, generateSecureId } from '@/lib/crypto';
 import { registerPairCode } from '@/lib/metadata';
 
 export async function POST(req: NextRequest) {
@@ -18,7 +18,10 @@ export async function POST(req: NextRequest) {
 
     await registerPairCode(code, deviceId, ttlSeconds);
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'localhost:3000';
+    const proto = req.headers.get('x-forwarded-proto') || (host.includes('localhost') ? 'http' : 'https');
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || `${proto}://${host}`;
+
     const qrPayload = JSON.stringify({
       code,
       deviceId,
@@ -32,6 +35,10 @@ export async function POST(req: NextRequest) {
       qrPayload,
     });
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to initiate pairing' }, { status: 500 });
+    console.error('[pair/start] Failed to initiate pairing:', error);
+    return NextResponse.json(
+      { error: 'Failed to initiate pairing: ' + (error instanceof Error ? error.message : String(error)) },
+      { status: 500 }
+    );
   }
 }

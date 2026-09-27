@@ -18,3 +18,5 @@ data/
 ios/build/
 ios/DerivedData/
 *.ipa
+*.tsbuildinfo
+.local-storage/

@@ -98,9 +98,13 @@ export default function TransferPage() {
         const data = await res.json();
         setPairCode(data.code);
         setQrPayload(data.qrPayload);
+        setErrorMessage(null);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setErrorMessage(err.error || 'Server error starting pairing session');
       }
     } catch {
-      setErrorMessage('Could not generate pairing session');
+      setErrorMessage('Could not connect to pairing service');
     }
   }
 

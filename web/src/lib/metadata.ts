@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { TransferMetadata, DeviceSession } from './types';
 import { deleteBlobObject, storeBlobObject } from './storage';
 
@@ -13,7 +14,34 @@ interface DatabaseState {
 
 // In-memory cache synced to local or blob storage
 let stateCache: DatabaseState | null = null;
-const LOCAL_DB_PATH = path.join(process.cwd(), '.local-storage', 'state.json');
+
+function getDbFilePath(): string {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    const tmpDir = path.join(os.tmpdir(), 'transfer-app-storage');
+    try {
+      if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      }
+    } catch {}
+    return path.join(tmpDir, 'state.json');
+  }
+
+  try {
+    const localDir = path.join(process.cwd(), '.local-storage');
+    if (!fs.existsSync(localDir)) {
+      fs.mkdirSync(localDir, { recursive: true });
+    }
+    return path.join(localDir, 'state.json');
+  } catch {
+    const tmpDir = path.join(os.tmpdir(), 'transfer-app-storage');
+    try {
+      if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      }
+    } catch {}
+    return path.join(tmpDir, 'state.json');
+  }
+}
 
 function getInitialState(): DatabaseState {
   return {
@@ -26,15 +54,15 @@ function getInitialState(): DatabaseState {
 async function loadState(): Promise<DatabaseState> {
   if (stateCache) return stateCache;
 
-  if (fs.existsSync(LOCAL_DB_PATH)) {
-    try {
-      const raw = fs.readFileSync(LOCAL_DB_PATH, 'utf-8');
+  try {
+    const dbPath = getDbFilePath();
+    if (fs.existsSync(dbPath)) {
+      const raw = fs.readFileSync(dbPath, 'utf-8');
       stateCache = JSON.parse(raw);
       return stateCache!;
-    } catch {
-      stateCache = getInitialState();
-      return stateCache;
     }
+  } catch (err) {
+    console.warn('[metadata] Could not load state from disk:', err);
   }
 
   stateCache = getInitialState();
@@ -43,11 +71,16 @@ async function loadState(): Promise<DatabaseState> {
 
 async function saveState(): Promise<void> {
   if (!stateCache) return;
-  const dir = path.dirname(LOCAL_DB_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  try {
+    const dbPath = getDbFilePath();
+    const dir = path.dirname(dbPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(dbPath, JSON.stringify(stateCache, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('[metadata] Could not write state to disk (in-memory state preserved):', err);
   }
-  fs.writeFileSync(LOCAL_DB_PATH, JSON.stringify(stateCache, null, 2), 'utf-8');
 }
 
 export function getDefaultExpirationHours(): number {

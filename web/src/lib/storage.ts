@@ -1,18 +1,51 @@
 import { put, del } from '@vercel/blob';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { TransferMetadata } from './types';
 
-const LOCAL_STORAGE_DIR = path.join(process.cwd(), '.local-storage');
-
-function isVercelBlobConfigured(): boolean {
+export function isVercelBlobConfigured(): boolean {
   return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
 }
 
-function ensureLocalDir() {
-  if (!fs.existsSync(LOCAL_STORAGE_DIR)) {
-    fs.mkdirSync(LOCAL_STORAGE_DIR, { recursive: true });
+export function getStorageDir(): string {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    const tmp = path.join(os.tmpdir(), 'transfer-app-storage');
+    try {
+      if (!fs.existsSync(tmp)) {
+        fs.mkdirSync(tmp, { recursive: true });
+      }
+    } catch {}
+    return tmp;
   }
+
+  try {
+    const localDir = path.join(process.cwd(), '.local-storage');
+    if (!fs.existsSync(localDir)) {
+      fs.mkdirSync(localDir, { recursive: true });
+    }
+    return localDir;
+  } catch {
+    const tmp = path.join(os.tmpdir(), 'transfer-app-storage');
+    try {
+      if (!fs.existsSync(tmp)) {
+        fs.mkdirSync(tmp, { recursive: true });
+      }
+    } catch {}
+    return tmp;
+  }
+}
+
+function ensureLocalDir(): string {
+  const dir = getStorageDir();
+  if (!fs.existsSync(dir)) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (e) {
+      console.warn('Could not create storage dir:', e);
+    }
+  }
+  return dir;
 }
 
 export async function storeBlobObject(
@@ -33,9 +66,9 @@ export async function storeBlobObject(
   }
 
   // Local filesystem fallback for dev without network or Blob token
-  ensureLocalDir();
+  const dir = ensureLocalDir();
   const safeFilename = pathname.replace(/[/\\]/g, '_');
-  const filePath = path.join(LOCAL_STORAGE_DIR, safeFilename);
+  const filePath = path.join(dir, safeFilename);
   
   if (Buffer.isBuffer(body)) {
     fs.writeFileSync(filePath, body);
@@ -53,7 +86,7 @@ export async function storeBlobObject(
     fs.writeFileSync(filePath, Buffer.concat(chunks));
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || '';
   return {
     url: `${appUrl}/api/storage/raw?key=${encodeURIComponent(safeFilename)}`,
     pathname,
@@ -73,9 +106,9 @@ export async function deleteBlobObject(blobUrlOrPath: string): Promise<void> {
   }
 
   try {
-    ensureLocalDir();
+    const dir = ensureLocalDir();
     const safeFilename = path.basename(blobUrlOrPath).replace(/[/\\]/g, '_');
-    const directPath = path.join(LOCAL_STORAGE_DIR, safeFilename);
+    const directPath = path.join(dir, safeFilename);
     if (fs.existsSync(directPath)) {
       fs.unlinkSync(directPath);
     }
@@ -85,7 +118,8 @@ export async function deleteBlobObject(blobUrlOrPath: string): Promise<void> {
 }
 
 export function readLocalBlob(key: string): { data: Buffer; exists: boolean } {
-  const filePath = path.join(LOCAL_STORAGE_DIR, path.basename(key));
+  const dir = getStorageDir();
+  const filePath = path.join(dir, path.basename(key));
   if (fs.existsSync(filePath)) {
     return { data: fs.readFileSync(filePath), exists: true };
   }
