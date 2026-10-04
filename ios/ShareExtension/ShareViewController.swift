@@ -1,5 +1,4 @@
 import UIKit
-import Social
 import UniformTypeIdentifiers
 
 @objc(ShareViewController)

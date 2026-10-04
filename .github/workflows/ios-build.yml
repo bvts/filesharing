@@ -16,8 +16,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode 15
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Select Xcode
+        run: |
+          echo "Selecting Xcode..."
+          if [ -d "/Applications/Xcode_16.2.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.2.app
+          elif [ -d "/Applications/Xcode_16.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.1.app
+          elif [ -d "/Applications/Xcode_16.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.0.app
+          elif [ -d "/Applications/Xcode.app" ]; then
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -26,7 +37,6 @@ jobs:
         run: |
           cd ios
           xcodegen generate --spec project.yml
-          sed -i '' 's/objectVersion = 77;/objectVersion = 56;/g' TransferApp.xcodeproj/project.pbxproj
 
       - name: Install Apple Certificate and Provisioning Profile
         env:
@@ -36,7 +46,7 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           if [ -z "$BUILD_CERTIFICATE_BASE64" ]; then
-            echo "::warning ::BUILD_CERTIFICATE_BASE64 not configured. Will produce unsigned simulator build."
+            echo "::warning ::BUILD_CERTIFICATE_BASE64 not configured. Will produce unsigned release build."
             exit 0
           fi
 
@@ -74,49 +84,75 @@ jobs:
           </plist>
           EOF
 
-      - name: Build Archive
+      - name: Build & Package IPA
         run: |
           cd ios
           mkdir -p build/out
           if [ -z "${{ secrets.BUILD_CERTIFICATE_BASE64 }}" ]; then
-            echo "No signing secrets provided. Building unsigned release archive..."
-            xcodebuild archive \
+            echo "No signing secrets provided. Building unsigned release app bundle..."
+            set -o pipefail
+            xcodebuild build \
               -project TransferApp.xcodeproj \
               -scheme TransferApp \
-              -archivePath build/TransferApp.xcarchive \
+              -configuration Release \
               -destination 'generic/platform=iOS' \
+              -derivedDataPath build/DerivedData \
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY=""
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGN_ENTITLEMENTS="" \
+              2>&1 | tee xcodebuild.log || {
+                echo "::error ::xcodebuild failed! Showing detailed errors:"
+                grep -E -C 3 "(error:|fatal error:|warning:.*failed|The following build commands failed:)" xcodebuild.log || tail -n 120 xcodebuild.log
+                exit 1
+              }
+
+            echo "Locating built TransferApp.app..."
+            APP_PATH=$(find build/DerivedData/Build/Products/Release-iphoneos -name "TransferApp.app" -type d | head -n 1)
+            if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+              echo "::error ::TransferApp.app not found in build output!"
+              exit 1
+            fi
+            echo "Found app at: $APP_PATH"
+
+            echo "Checking embedded plugins..."
+            SHARE_PLIST="$APP_PATH/PlugIns/ShareExtension.appex/Info.plist"
+            if [ -f "$SHARE_PLIST" ]; then
+              plutil -p "$SHARE_PLIST"
+              echo "ShareExtension Info.plist verified."
+            else
+              echo "ShareExtension not automatically in PlugIns, checking products..."
+              EXT_PATH=$(find build/DerivedData/Build/Products/Release-iphoneos -name "ShareExtension.appex" -type d | head -n 1)
+              if [ -n "$EXT_PATH" ] && [ -d "$EXT_PATH" ]; then
+                mkdir -p "$APP_PATH/PlugIns"
+                cp -r "$EXT_PATH" "$APP_PATH/PlugIns/"
+                echo "Copied ShareExtension.appex into $APP_PATH/PlugIns/"
+              fi
+            fi
 
             echo "Packaging unsigned IPA payload..."
             mkdir -p build/payload_temp/Payload
-            cp -r build/TransferApp.xcarchive/Products/Applications/TransferApp.app build/payload_temp/Payload/
-
-            echo "Verifying ShareExtension.appex Info.plist..."
-            SHARE_PLIST="build/payload_temp/Payload/TransferApp.app/PlugIns/ShareExtension.appex/Info.plist"
-            if [ -f "$SHARE_PLIST" ]; then
-              plutil -p "$SHARE_PLIST"
-              plutil -p "$SHARE_PLIST" | grep -q "NSExtension" || { echo "::error ::NSExtension dictionary is missing from $SHARE_PLIST"; exit 1; }
-              echo "ShareExtension Info.plist verified successfully with NSExtension dictionary."
-            else
-              echo "::error ::ShareExtension.appex/Info.plist not found at $SHARE_PLIST!"
-              exit 1
-            fi
-
+            cp -r "$APP_PATH" build/payload_temp/Payload/
             cd build/payload_temp
             zip -qr ../out/TransferApp.ipa Payload
             cd ../..
             rm -rf build/payload_temp
+            echo "Unsigned IPA successfully created at ios/build/out/TransferApp.ipa"
           else
             echo "Building signed archive with Apple credentials..."
+            set -o pipefail
             xcodebuild archive \
               -project TransferApp.xcodeproj \
               -scheme TransferApp \
               -archivePath build/TransferApp.xcarchive \
               -destination 'generic/platform=iOS' \
               PROVISIONING_PROFILE_SPECIFIER="" \
-              CODE_SIGNING_ALLOWED=YES
+              CODE_SIGNING_ALLOWED=YES \
+              2>&1 | tee xcodebuild.log || {
+                echo "::error ::xcodebuild archive failed!"
+                grep -E -C 3 "(error:|fatal error:|warning:.*failed|The following build commands failed:)" xcodebuild.log || tail -n 120 xcodebuild.log
+                exit 1
+              }
 
             echo "Exporting signed IPA..."
             xcodebuild -exportArchive \

@@ -40,5 +40,9 @@
     <array>
         <string>UIInterfaceOrientationPortrait</string>
     </array>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Transfer needs access to your photos to upload them to your PC.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Transfer needs permission to save received photos to your photo library.</string>
 </dict>
 </plist>
