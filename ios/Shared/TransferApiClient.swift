@@ -65,6 +65,30 @@ public final class TransferApiClient {
         }
     }
 
+    public var userId: String? {
+        get {
+            if let groupUser = appGroupDefaults?.string(forKey: "user_id"), !groupUser.isEmpty {
+                return groupUser
+            }
+            if let containerFile = sharedContainerUrl?.appendingPathComponent("user_id.txt"),
+               let saved = try? String(contentsOf: containerFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
+                return saved
+            }
+            return UserDefaults.standard.string(forKey: "user_id")
+        }
+        set {
+            appGroupDefaults?.set(newValue, forKey: "user_id")
+            UserDefaults.standard.set(newValue, forKey: "user_id")
+            if let containerFile = sharedContainerUrl?.appendingPathComponent("user_id.txt") {
+                if let val = newValue {
+                    try? val.write(to: containerFile, atomically: true, encoding: .utf8)
+                } else {
+                    try? FileManager.default.removeItem(at: containerFile)
+                }
+            }
+        }
+    }
+
     public var deviceId: String? {
         get {
             if let groupDev = appGroupDefaults?.string(forKey: "device_id"), !groupDev.isEmpty {
@@ -90,6 +114,90 @@ public final class TransferApiClient {
     }
 
     private init() {}
+
+    public func login(username: String, password: String) async throws -> (userId: String, authToken: String) {
+        guard let url = URL(string: "\(baseUrl)/api/auth/login") else {
+            throw NSError(domain: "TransferApp", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid server URL"])
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = ["username": username, "password": password]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw NSError(domain: "TransferApp", code: 500, userInfo: [NSLocalizedDescriptionKey: "Network response error"])
+        }
+
+        if http.statusCode == 200 {
+            struct LoginRes: Codable {
+                struct UserInfo: Codable {
+                    let id: String
+                    let username: String
+                }
+                let success: Bool
+                let user: UserInfo
+                let authToken: String
+            }
+            let res = try JSONDecoder().decode(LoginRes.self, from: data)
+            self.userId = res.user.id
+            self.authToken = res.authToken
+            return (res.user.id, res.authToken)
+        } else {
+            struct ErrRes: Codable {
+                let error: String?
+            }
+            let err = (try? JSONDecoder().decode(ErrRes.self, from: data))?.error ?? "Login failed"
+            throw NSError(domain: "TransferApp", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: err])
+        }
+    }
+
+    public func signup(username: String, password: String) async throws -> (userId: String, authToken: String) {
+        guard let url = URL(string: "\(baseUrl)/api/auth/signup") else {
+            throw NSError(domain: "TransferApp", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid server URL"])
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = ["username": username, "password": password]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw NSError(domain: "TransferApp", code: 500, userInfo: [NSLocalizedDescriptionKey: "Network response error"])
+        }
+
+        if http.statusCode == 200 {
+            struct SignupRes: Codable {
+                struct UserInfo: Codable {
+                    let id: String
+                    let username: String
+                }
+                let success: Bool
+                let user: UserInfo
+                let authToken: String
+            }
+            let res = try JSONDecoder().decode(SignupRes.self, from: data)
+            self.userId = res.user.id
+            self.authToken = res.authToken
+            return (res.user.id, res.authToken)
+        } else {
+            struct ErrRes: Codable {
+                let error: String?
+            }
+            let err = (try? JSONDecoder().decode(ErrRes.self, from: data))?.error ?? "Registration failed"
+            throw NSError(domain: "TransferApp", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: err])
+        }
+    }
+
+    public func logout() {
+        self.authToken = nil
+        self.userId = nil
+        self.deviceId = nil
+    }
 
     public func fetchTransfers() async throws -> TransfersResponse {
         guard let token = authToken else {

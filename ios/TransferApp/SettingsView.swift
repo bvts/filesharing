@@ -10,7 +10,18 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section(header: Text("DEVICE IDENTITY").font(.system(size: 10, design: .monospaced))) {
+                Section(header: Text("ACCOUNT & IDENTITY").font(.system(size: 10, design: .monospaced))) {
+                    if let uid = TransferApiClient.shared.userId {
+                        HStack {
+                            Text("USER ID")
+                                .font(.system(size: 12, design: .monospaced))
+                            Spacer()
+                            Text(uid)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(.gray)
+                        }
+                    }
+
                     HStack {
                         Text("DEVICE ID")
                             .font(.system(size: 12, design: .monospaced))
@@ -39,7 +50,7 @@ struct SettingsView: View {
                         }
 
                         Button(role: .destructive, action: unpairDevice) {
-                            Text("UNPAIR THIS DEVICE")
+                            Text("LOG OUT / UNPAIR DEVICE")
                                 .font(.system(size: 12, design: .monospaced))
                                 .foregroundColor(.red)
                         }
@@ -87,6 +98,9 @@ struct SettingsView: View {
                 var req = URLRequest(url: url)
                 req.httpMethod = "POST"
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                if let token = TransferApiClient.shared.authToken {
+                    req.setValue(token, forHTTPHeaderField: "x-transfer-auth")
+                }
                 let body = ["deviceId": TransferApiClient.shared.deviceId]
                 req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -100,14 +114,15 @@ struct SettingsView: View {
                     isGeneratingCode = false
                 }
             } catch {
-                await MainActor.run { isGeneratingCode = false }
+                await MainActor.run {
+                    isGeneratingCode = false
+                }
             }
         }
     }
 
     private func unpairDevice() {
-        TransferApiClient.shared.authToken = nil
-        TransferApiClient.shared.deviceId = nil
+        TransferApiClient.shared.logout()
         isPaired = false
         dismiss()
     }
@@ -115,6 +130,7 @@ struct SettingsView: View {
     private func clearAllTransfers() {
         Task {
             try? await TransferApiClient.shared.clearAllTransfers()
+            dismiss()
         }
     }
 }

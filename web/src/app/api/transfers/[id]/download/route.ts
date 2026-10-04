@@ -10,31 +10,34 @@ interface RouteContext {
 }
 
 export async function GET(req: NextRequest, { params }: RouteContext) {
-  // Allow authentication via cookie/header OR query token for direct download anchors
   const { searchParams } = new URL(req.url);
   const queryToken = searchParams.get('token');
 
   let auth = authenticateRequest(req);
   if (!auth.authenticated && queryToken) {
-    const { verifyDeviceToken } = await import('@/lib/crypto');
-    const verified = verifyDeviceToken(queryToken);
-    if (verified.valid && verified.deviceId) {
-      auth = { authenticated: true, deviceId: verified.deviceId };
+    const { verifyAuthToken } = await import('@/lib/crypto');
+    const verified = verifyAuthToken(queryToken);
+    if (verified.valid && verified.userId) {
+      auth = { authenticated: true, userId: verified.userId, deviceId: verified.deviceId };
     }
   }
 
-  if (!auth.authenticated || !auth.deviceId) {
+  if (!auth.authenticated || !auth.userId) {
     return NextResponse.json({ error: 'Unauthorized download access' }, { status: 401 });
   }
 
   const transfer = await getTransfer(params.id);
-  if (!transfer || transfer.deviceId !== auth.deviceId) {
+  const isOwner =
+    transfer &&
+    (transfer.userId ? transfer.userId === auth.userId : transfer.deviceId === auth.deviceId || transfer.deviceId === auth.userId);
+
+  if (!transfer || !isOwner) {
+    // Return 404 so attackers cannot probe for existence of transfers across accounts
     return NextResponse.json({ error: 'Transfer not found or expired' }, { status: 404 });
   }
 
   // If stored in Vercel Blob, redirect directly to the signed/public URL with download header disposition
   if (transfer.blobUrl.startsWith('http://') || transfer.blobUrl.startsWith('https://')) {
-    // If it's a remote Vercel Blob URL
     if (!transfer.blobUrl.includes('/api/storage/raw')) {
       const response = NextResponse.redirect(transfer.blobUrl, 302);
       response.headers.set(

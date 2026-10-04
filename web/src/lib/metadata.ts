@@ -1,18 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { TransferMetadata, DeviceSession } from './types';
-import { deleteBlobObject, storeBlobObject } from './storage';
-
-const META_STORE_PATH = 'metadata/state.json';
+import { TransferMetadata, DeviceSession, UserRecord } from './types';
+import { deleteBlobObject } from './storage';
+import { generateSecureId } from './crypto';
 
 interface DatabaseState {
+  users: Record<string, UserRecord>;
   devices: Record<string, DeviceSession>;
-  pairCodes: Record<string, { deviceId: string; expiresAt: number; claimed?: boolean }>;
+  pairCodes: Record<string, { deviceId: string; userId?: string; expiresAt: number; claimed?: boolean }>;
   transfers: Record<string, TransferMetadata>;
 }
 
-// In-memory cache synced to local or blob storage
 let stateCache: DatabaseState | null = null;
 
 function getDbFilePath(): string {
@@ -45,6 +44,7 @@ function getDbFilePath(): string {
 
 function getInitialState(): DatabaseState {
   return {
+    users: {},
     devices: {},
     pairCodes: {},
     transfers: {},
@@ -58,8 +58,14 @@ async function loadState(): Promise<DatabaseState> {
     const dbPath = getDbFilePath();
     if (fs.existsSync(dbPath)) {
       const raw = fs.readFileSync(dbPath, 'utf-8');
-      stateCache = JSON.parse(raw);
-      return stateCache!;
+      const parsed = JSON.parse(raw);
+      stateCache = {
+        users: parsed.users || {},
+        devices: parsed.devices || {},
+        pairCodes: parsed.pairCodes || {},
+        transfers: parsed.transfers || {},
+      };
+      return stateCache;
     }
   } catch (err) {
     console.warn('[metadata] Could not load state from disk:', err);
@@ -83,6 +89,48 @@ async function saveState(): Promise<void> {
   }
 }
 
+// User Account Management
+export async function createUser(username: string, passwordHash: string, salt: string): Promise<UserRecord> {
+  const state = await loadState();
+  const lower = username.toLowerCase().trim();
+
+  // Check if exists
+  for (const u of Object.values(state.users)) {
+    if (u.username.toLowerCase() === lower) {
+      throw new Error('Username already exists');
+    }
+  }
+
+  const id = generateSecureId('usr');
+  const user: UserRecord = {
+    id,
+    username: lower,
+    passwordHash,
+    salt,
+    createdAt: new Date().toISOString(),
+  };
+
+  state.users[id] = user;
+  await saveState();
+  return user;
+}
+
+export async function getUserByUsername(username: string): Promise<UserRecord | null> {
+  const state = await loadState();
+  const lower = username.toLowerCase().trim();
+  for (const u of Object.values(state.users)) {
+    if (u.username.toLowerCase() === lower) {
+      return u;
+    }
+  }
+  return null;
+}
+
+export async function getUserById(id: string): Promise<UserRecord | null> {
+  const state = await loadState();
+  return state.users[id] || null;
+}
+
 export function getDefaultExpirationHours(): number {
   const envVal = process.env.TRANSFER_EXPIRATION_HOURS;
   if (envVal) {
@@ -92,31 +140,45 @@ export function getDefaultExpirationHours(): number {
   return 24;
 }
 
-export async function registerPairCode(code: string, deviceId: string, ttlSeconds = 600): Promise<void> {
+export async function registerPairCode(
+  code: string,
+  deviceId: string,
+  ttlSeconds = 600,
+  userId?: string
+): Promise<void> {
   const state = await loadState();
   state.pairCodes[code] = {
     deviceId,
+    userId,
     expiresAt: Date.now() + ttlSeconds * 1000,
     claimed: false,
   };
   await saveState();
 }
 
-export async function checkPairCodeStatus(code: string): Promise<{ claimed: boolean; deviceId: string | null }> {
+export async function checkPairCodeStatus(
+  code: string
+): Promise<{ claimed: boolean; deviceId: string | null; userId?: string | null }> {
   const state = await loadState();
   const entry = state.pairCodes[code];
-  if (!entry) return { claimed: false, deviceId: null };
+  if (!entry) return { claimed: false, deviceId: null, userId: null };
 
   if (Date.now() > entry.expiresAt) {
     delete state.pairCodes[code];
     await saveState();
-    return { claimed: false, deviceId: null };
+    return { claimed: false, deviceId: null, userId: null };
   }
 
-  return { claimed: Boolean(entry.claimed), deviceId: entry.deviceId };
+  return {
+    claimed: Boolean(entry.claimed),
+    deviceId: entry.deviceId,
+    userId: entry.userId || null,
+  };
 }
 
-export async function consumePairCode(code: string): Promise<string | null> {
+export async function consumePairCode(
+  code: string
+): Promise<{ deviceId: string; userId?: string } | null> {
   const state = await loadState();
   const entry = state.pairCodes[code];
   if (!entry) return null;
@@ -132,29 +194,35 @@ export async function consumePairCode(code: string): Promise<string | null> {
   }
 
   const deviceId = entry.deviceId;
+  const userId = entry.userId;
   entry.claimed = true;
   entry.expiresAt = Date.now() + 60 * 1000; // retain briefly so polling detects it
 
   if (!state.devices[deviceId]) {
     state.devices[deviceId] = {
       deviceId,
+      userId,
       name: 'Personal Device',
       pairedAt: new Date().toISOString(),
       lastActiveAt: new Date().toISOString(),
     };
   } else {
     state.devices[deviceId].lastActiveAt = new Date().toISOString();
+    if (userId) {
+      state.devices[deviceId].userId = userId;
+    }
   }
 
   await saveState();
-  return deviceId;
+  return { deviceId, userId };
 }
 
-export async function ensureDevice(deviceId: string, name?: string): Promise<DeviceSession> {
+export async function ensureDevice(deviceId: string, name?: string, userId?: string): Promise<DeviceSession> {
   const state = await loadState();
   if (!state.devices[deviceId]) {
     state.devices[deviceId] = {
       deviceId,
+      userId,
       name: name || 'Personal Device',
       pairedAt: new Date().toISOString(),
       lastActiveAt: new Date().toISOString(),
@@ -162,6 +230,9 @@ export async function ensureDevice(deviceId: string, name?: string): Promise<Dev
     await saveState();
   } else {
     state.devices[deviceId].lastActiveAt = new Date().toISOString();
+    if (userId) {
+      state.devices[deviceId].userId = userId;
+    }
     await saveState();
   }
   return state.devices[deviceId];
@@ -183,20 +254,28 @@ export async function deleteTransfer(id: string): Promise<boolean> {
   const item = state.transfers[id];
   if (!item) return false;
 
-  await deleteBlobObject(item.blobUrl || item.blobPathname);
+  try {
+    await deleteBlobObject(item.blobPathname);
+  } catch (err) {
+    console.warn('[metadata] Could not remove storage blob:', err);
+  }
+
   delete state.transfers[id];
   await saveState();
   return true;
 }
 
-export async function cleanupExpiredTransfers(deviceId?: string): Promise<{ deletedCount: number }> {
+export async function cleanupExpiredTransfers(ownerId?: string): Promise<{ deletedCount: number }> {
   const state = await loadState();
   const now = Date.now();
   let deletedCount = 0;
 
   const toDelete: string[] = [];
   for (const [id, item] of Object.entries(state.transfers)) {
-    if (deviceId && item.deviceId !== deviceId) continue;
+    if (ownerId && item.userId !== ownerId && item.deviceId !== ownerId) {
+      continue;
+    }
+
     const expiresTimestamp = new Date(item.expiresAt).getTime();
     if (now > expiresTimestamp) {
       toDelete.push(id);
@@ -211,13 +290,13 @@ export async function cleanupExpiredTransfers(deviceId?: string): Promise<{ dele
   return { deletedCount };
 }
 
-export async function deleteAllTransfersForDevice(deviceId: string): Promise<{ deletedCount: number }> {
+export async function deleteAllTransfersForUser(userId: string): Promise<{ deletedCount: number }> {
   const state = await loadState();
   let deletedCount = 0;
 
   const toDelete: string[] = [];
   for (const [id, item] of Object.entries(state.transfers)) {
-    if (item.deviceId === deviceId) {
+    if (item.userId === userId || item.deviceId === userId) {
       toDelete.push(id);
     }
   }
@@ -230,7 +309,14 @@ export async function deleteAllTransfersForDevice(deviceId: string): Promise<{ d
   return { deletedCount };
 }
 
-export async function getTransfersForDevice(deviceId: string): Promise<{
+export async function deleteAllTransfersForDevice(deviceId: string): Promise<{ deletedCount: number }> {
+  return deleteAllTransfersForUser(deviceId);
+}
+
+export async function getTransfersForUser(
+  userId: string,
+  deviceId?: string
+): Promise<{
   fromPhone: TransferMetadata[];
   fromPc: TransferMetadata[];
   summary: {
@@ -240,7 +326,7 @@ export async function getTransfersForDevice(deviceId: string): Promise<{
   };
 }> {
   // Always trigger lazy cleanup of expired transfers first
-  await cleanupExpiredTransfers(deviceId);
+  await cleanupExpiredTransfers(userId);
 
   const state = await loadState();
   const fromPhone: TransferMetadata[] = [];
@@ -249,7 +335,9 @@ export async function getTransfersForDevice(deviceId: string): Promise<{
   let oldestExpiresAt: string | null = null;
 
   for (const item of Object.values(state.transfers)) {
-    if (item.deviceId !== deviceId) continue;
+    // Check user ownership or device ownership
+    const isOwner = item.userId ? item.userId === userId : item.deviceId === deviceId || item.deviceId === userId;
+    if (!isOwner) continue;
 
     if (item.direction === 'phone_to_pc') {
       fromPhone.push(item);
@@ -276,4 +364,19 @@ export async function getTransfersForDevice(deviceId: string): Promise<{
       oldestExpiresAt,
     },
   };
+}
+
+export async function getTransfersForDevice(
+  deviceId: string,
+  userId?: string
+): Promise<{
+  fromPhone: TransferMetadata[];
+  fromPc: TransferMetadata[];
+  summary: {
+    totalCount: number;
+    totalSizeBytes: number;
+    oldestExpiresAt: string | null;
+  };
+}> {
+  return getTransfersForUser(userId || deviceId, deviceId);
 }

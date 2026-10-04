@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generatePairCode, generateSecureId } from '@/lib/crypto';
 import { registerPairCode } from '@/lib/metadata';
+import { authenticateRequest } from '@/lib/auth';
 
 export async function POST(req: NextRequest) {
   try {
@@ -11,12 +12,14 @@ export async function POST(req: NextRequest) {
       // Allow empty body
     }
 
-    // If client already has a deviceId, bind code to it; otherwise create a new identity
+    const auth = authenticateRequest(req);
+    const userId = auth.authenticated && auth.userId ? auth.userId : undefined;
+
     const deviceId = body.deviceId || generateSecureId('dev');
     const code = generatePairCode();
     const ttlSeconds = 600; // 10 minutes
 
-    await registerPairCode(code, deviceId, ttlSeconds);
+    await registerPairCode(code, deviceId, ttlSeconds, userId);
 
     const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'localhost:3000';
     const proto = req.headers.get('x-forwarded-proto') || (host.includes('localhost') ? 'http' : 'https');
@@ -25,12 +28,14 @@ export async function POST(req: NextRequest) {
     const qrPayload = JSON.stringify({
       code,
       deviceId,
+      userId,
       url: `${appUrl}?pair=${code}`,
     });
 
     return NextResponse.json({
       code,
       deviceId,
+      userId,
       expiresInSeconds: ttlSeconds,
       qrPayload,
     });

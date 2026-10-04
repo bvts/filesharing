@@ -4,22 +4,23 @@ import { generateSecureId } from '@/lib/crypto';
 import {
   addTransfer,
   cleanupExpiredTransfers,
-  deleteAllTransfersForDevice,
+  deleteAllTransfersForUser,
   getDefaultExpirationHours,
-  getTransfersForDevice,
+  getTransfersForUser,
 } from '@/lib/metadata';
 import { storeBlobObject } from '@/lib/storage';
 import { TransferDirection, TransferMetadata } from '@/lib/types';
 
 export async function GET(req: NextRequest) {
   const auth = authenticateRequest(req);
-  if (!auth.authenticated || !auth.deviceId) {
+  if (!auth.authenticated || !auth.userId) {
     return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
   }
 
-  const data = await getTransfersForDevice(auth.deviceId);
+  const data = await getTransfersForUser(auth.userId, auth.deviceId);
   return NextResponse.json({
-    deviceId: auth.deviceId,
+    userId: auth.userId,
+    deviceId: auth.deviceId || auth.userId,
     now: new Date().toISOString(),
     ...data,
   });
@@ -27,65 +28,84 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const auth = authenticateRequest(req);
-  if (!auth.authenticated || !auth.deviceId) {
+  if (!auth.authenticated || !auth.userId) {
     return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
   }
 
   try {
     const formData = await req.formData();
-    const file = formData.get('file') as File | null;
+    // Support multiple files under 'files' or single file under 'file'
+    const files = formData.getAll('files') as File[];
+    const singleFile = formData.get('file') as File | null;
+    const fileList: File[] = files.length > 0 ? files : singleFile ? [singleFile] : [];
+
     const direction = (formData.get('direction') as TransferDirection) || 'pc_to_phone';
     const customExpirationHours = formData.get('expirationHours');
 
-    if (!file) {
-      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+    if (fileList.length === 0) {
+      return NextResponse.json({ error: 'No files provided' }, { status: 400 });
     }
 
-    const transferId = generateSecureId('tr');
-    const originalName = file.name || 'unnamed_file';
-    const mimeType = file.type || 'application/octet-stream';
-    const sizeBytes = file.size;
-
-    // Check maximum upload size limit
     const maxSize = parseInt(process.env.MAX_UPLOAD_SIZE_BYTES || '524288000', 10);
-    if (sizeBytes > maxSize) {
-      return NextResponse.json({ error: 'File size exceeds server upload limit' }, { status: 413 });
-    }
-
     const expirationHours = customExpirationHours
       ? parseInt(customExpirationHours.toString(), 10) || getDefaultExpirationHours()
       : getDefaultExpirationHours();
-
     const expiresAt = new Date(Date.now() + expirationHours * 3600 * 1000).toISOString();
 
-    // Sanitize pathname for storage
-    const safeBaseName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const storagePathname = `transfers/${auth.deviceId}/${transferId}/${safeBaseName}`;
+    const createdTransfers: TransferMetadata[] = [];
+    const errors: { filename: string; error: string }[] = [];
 
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    for (const file of fileList) {
+      if (file.size > maxSize) {
+        errors.push({ filename: file.name, error: 'File size exceeds upload limit' });
+        continue;
+      }
 
-    const storedBlob = await storeBlobObject(storagePathname, buffer, mimeType);
+      try {
+        const transferId = generateSecureId('tr');
+        const originalName = file.name || 'unnamed_file';
+        const mimeType = file.type || 'application/octet-stream';
+        const sizeBytes = file.size;
 
-    const transferRecord: TransferMetadata = {
-      id: transferId,
-      deviceId: auth.deviceId,
-      filename: originalName,
-      mimeType,
-      sizeBytes,
-      direction,
-      status: 'ready',
-      blobUrl: storedBlob.url,
-      blobPathname: storedBlob.pathname,
-      createdAt: new Date().toISOString(),
-      expiresAt,
-    };
+        const safeBaseName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePathname = `transfers/${auth.userId}/${transferId}/${safeBaseName}`;
 
-    await addTransfer(transferRecord);
+        const arrayBuffer = await file.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        const storedBlob = await storeBlobObject(storagePathname, buffer, mimeType);
+
+        const transferRecord: TransferMetadata = {
+          id: transferId,
+          userId: auth.userId,
+          deviceId: auth.deviceId || auth.userId,
+          filename: originalName,
+          mimeType,
+          sizeBytes,
+          direction,
+          status: 'ready',
+          blobUrl: storedBlob.url,
+          blobPathname: storedBlob.pathname,
+          createdAt: new Date().toISOString(),
+          expiresAt,
+        };
+
+        await addTransfer(transferRecord);
+        createdTransfers.push(transferRecord);
+      } catch (err: any) {
+        errors.push({ filename: file.name, error: err.message || 'Failed to process file' });
+      }
+    }
+
+    if (createdTransfers.length === 0 && errors.length > 0) {
+      return NextResponse.json({ error: 'All uploads failed', details: errors }, { status: 400 });
+    }
 
     return NextResponse.json({
       success: true,
-      transfer: transferRecord,
+      transfers: createdTransfers,
+      transfer: createdTransfers[0],
+      errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {
     console.error('Upload error:', error);
@@ -95,7 +115,7 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   const auth = authenticateRequest(req);
-  if (!auth.authenticated || !auth.deviceId) {
+  if (!auth.authenticated || !auth.userId) {
     return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
   }
 
@@ -103,12 +123,12 @@ export async function DELETE(req: NextRequest) {
   const action = searchParams.get('action');
 
   if (action === 'clear_expired') {
-    const res = await cleanupExpiredTransfers(auth.deviceId);
+    const res = await cleanupExpiredTransfers(auth.userId);
     return NextResponse.json({ success: true, deletedCount: res.deletedCount });
   }
 
   if (action === 'clear_all') {
-    const res = await deleteAllTransfersForDevice(auth.deviceId);
+    const res = await deleteAllTransfersForUser(auth.userId);
     return NextResponse.json({ success: true, deletedCount: res.deletedCount });
   }
 

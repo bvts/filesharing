@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { COOKIE_AUTH_NAME, signDeviceToken } from '@/lib/crypto';
+import { COOKIE_AUTH_NAME, signAuthToken } from '@/lib/crypto';
 import { consumePairCode } from '@/lib/metadata';
 
 export async function POST(req: NextRequest) {
@@ -12,21 +12,23 @@ export async function POST(req: NextRequest) {
     }
 
     const cleanCode = code.trim();
-    const deviceId = await consumePairCode(cleanCode);
+    const result = await consumePairCode(cleanCode);
 
-    if (!deviceId) {
+    if (!result) {
       return NextResponse.json({ error: 'Invalid or expired pairing code' }, { status: 401 });
     }
 
-    const authToken = signDeviceToken(deviceId);
+    const { deviceId, userId } = result;
+    const effectiveUserId = userId || deviceId;
+    const authToken = signAuthToken(effectiveUserId, deviceId);
 
     const response = NextResponse.json({
       success: true,
       deviceId,
+      userId: effectiveUserId,
       authToken,
     });
 
-    // Set secure HTTP-only cookie for browser client
     response.cookies.set({
       name: COOKIE_AUTH_NAME,
       value: authToken,
@@ -34,7 +36,7 @@ export async function POST(req: NextRequest) {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
-      maxAge: 365 * 24 * 60 * 60, // 1 year
+      maxAge: 365 * 24 * 60 * 60,
     });
 
     return response;

@@ -1,24 +1,21 @@
 # TRANSFER // Personal Phone ↔ PC File Transfer
 
-A minimal, personal, zero-friction cross-device file transfer utility designed to move files between an iPhone and a PC browser with temporary, self-expiring storage.
-
-## Architecture
-
-- **Web / Server (`web/`)**: Next.js App Router, TypeScript, pure technical dark CSS (`#050505`), Vercel deployment, Vercel Blob object storage with local filesystem fallback for development.
-- **iOS (`ios/`)**: Native Swift / SwiftUI app (`TransferApp`) and native iOS Share Extension (`ShareExtension`) supporting Photos, Files, Videos, and Documents via App Group (`group.com.transfer.app`) and Keychain storage.
-- **CI/CD (`.github/workflows/ios-build.yml`)**: GitHub Actions macOS workflow to compile and export the iOS application into an installable `.ipa`.
+A minimal, secure, personal cross-device file transfer system designed to instantly move files and images between an iPhone (iOS App & Share Sheet) and a PC browser with private, self-expiring storage.
 
 ---
 
-## Philosophy & Design
+## Features
 
-- **Technical, minimal, dark**: Strict `#050505` background, monospaced typography (Geist Mono / JetBrains Mono), soft 1px borders, zero marketing fluff, zero emojis, zero fake loading screens.
-- **Zero Accounts**: Pairing is instant using single-use 6-digit PINs and cryptographically signed session tokens stored in Keychain and HTTP-only cookies.
-- **Temporary Storage**: Files live in object storage with a strict TTL (default 24h). Expired files are lazily cleaned on request or explicitly cleared via `CLEAR EXPIRED` / `CLEAR ALL`.
+- **Private & Authenticated**: Complete user authentication (Sign Up / Login / Logout) with PBKDF2 salted password hashing, secure HTTP-only cookies, and persistent Bearer/Keychain tokens. Files are strictly isolated to the authenticated user and cannot be accessed by guessing IDs or URLs.
+- **Native iOS Share Sheet Integration**: Native iOS 16/17/18+ share sheet trigger from incoming and outgoing files directly sharing into native iOS apps (Files, AirDrop, Messages, etc.).
+- **Bulk Transfers**: Drag-and-drop or select multiple photos, videos, and documents at once with real-time percentage progress and partial failure reporting.
+- **Responsive Mobile Layout**: Safe-area aware (`env(safe-area-inset-top)`, `env(safe-area-inset-bottom)`), zero horizontal overflow, and text truncation preventing layout clipping on iPhone.
+- **Ephemeral Storage**: Configurable TTL (default 24h) with automated lazy expiration cleanup and manual one-click prune options.
+- **Dual Storage Engine**: Production-ready Vercel Blob adapter with private directory scoping (`transfers/{userId}/{transferId}/{file}`) and a local storage filesystem fallback for offline development.
 
 ---
 
-## Directory Structure
+## Architecture & Project Structure
 
 ```text
 ├── .github/
@@ -26,38 +23,37 @@ A minimal, personal, zero-friction cross-device file transfer utility designed t
 │       └── ios-build.yml              # Automated macOS IPA build & signing workflow
 ├── ios/
 │   ├── Shared/
-│   │   ├── KeychainHelper.swift       # Secure token persistence in Keychain
-│   │   ├── TransferModels.swift       # JSON transfer metadata models
-│   │   └── TransferApiClient.swift    # URLSession client for app and extension
+│   │   ├── KeychainHelper.swift       # Secure token persistence in Keychain & App Group
+│   │   ├── TransferModels.swift       # Decodable models for transfers and summaries
+│   │   └── TransferApiClient.swift    # URLSession client handling auth, streaming, & queues
 │   ├── TransferApp/
 │   │   ├── TransferApp.swift          # SwiftUI App lifecycle
-│   │   ├── ContentView.swift          # Main technical inbox & outbox UI
-│   │   ├── SettingsView.swift         # Server configuration & pairing
+│   │   ├── ContentView.swift          # Main dashboard, bulk upload, native share sheet, & auth
+│   │   ├── SettingsView.swift         # Server configuration, account status, & pairing
 │   │   └── Info.plist / .entitlements
 │   ├── ShareExtension/
-│   │   ├── ShareViewController.swift  # Native Share Sheet handler
+│   │   ├── ShareViewController.swift  # Native iOS Share Sheet handler for photos & files
 │   │   └── Info.plist / .entitlements
 │   └── TransferApp.xcodeproj/         # Complete Xcode 14+ / 15+ project configuration
 ├── web/
 │   ├── src/
 │   │   ├── app/
 │   │   │   ├── api/
-│   │   │   │   ├── pair/start/route.ts
-│   │   │   │   ├── pair/complete/route.ts
-│   │   │   │   ├── transfers/route.ts
-│   │   │   │   ├── transfers/[id]/download/route.ts
-│   │   │   │   ├── transfers/[id]/route.ts
-│   │   │   │   └── upload-token/route.ts
-│   │   │   ├── globals.css            # Dark mono technical stylesheet
-│   │   │   ├── layout.tsx
-│   │   │   └── page.tsx               # Minimal utility dashboard
+│   │   │   │   ├── auth/              # Sign up, login, logout, me
+│   │   │   │   ├── pair/              # Start, complete, poll 6-digit linking
+│   │   │   │   ├── transfers/         # Upload, list, delete, clear
+│   │   │   │   │   └── [id]/download/ # User-scoped authorized download
+│   │   │   │   └── storage/raw/       # Authenticated raw stream
+│   │   │   ├── globals.css            # Safe area variables & dark monospace styles
+│   │   │   ├── layout.tsx             # Viewport configuration & mobile meta
+│   │   │   └── page.tsx               # Utility dashboard with bulk dropzone & auth
 │   │   └── lib/
-│   │       ├── auth.ts                # Session token verification
-│   │       ├── crypto.ts              # HMAC SHA-256 tokens & PIN generator
-│   │       ├── metadata.ts            # State manager & expiration sweeper
+│   │       ├── auth.ts                # Session & request verification
+│   │       ├── crypto.ts              # Password hashing & HMAC-SHA256 session tokens
+│   │       ├── metadata.ts            # State manager, user store, & expiration engine
 │   │       ├── storage.ts             # Vercel Blob & local fallback
 │   │       └── types.ts
-│   └── tests/                         # Node test runner suite
+│   └── tests/                         # Node test runner suite (crypto, auth, lifecycle)
 ├── .env.example
 ├── CONSTRAINTS.md
 ├── SPEC.md
@@ -66,31 +62,59 @@ A minimal, personal, zero-friction cross-device file transfer utility designed t
 
 ---
 
-## Local Development (Windows / macOS / Linux)
+## Environment Variables
+
+Create a `.env.local` file inside `web/` (or configure in your Vercel project settings):
+
+```env
+# Optional: Secret used for HMAC-SHA256 session and pairing token signing (recommended in production)
+TRANSFER_AUTH_SECRET=your_super_secret_key_minimum_32_characters_long
+
+# Optional: Vercel Blob storage token. If omitted, files are saved locally to disk in tmpdir/.local-storage
+BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxxxxxxxxxxx
+
+# Optional: Hours before uploaded files expire and are automatically pruned (default: 24)
+TRANSFER_EXPIRATION_HOURS=24
+
+# Optional: Maximum upload size in bytes (default: 524288000 = 500 MB)
+MAX_UPLOAD_SIZE_BYTES=524288000
+
+# Optional: Public URL of the web app (e.g., https://transfer.yourdomain.com)
+NEXT_PUBLIC_APP_URL=https://transfer.yourdomain.com
+```
+
+---
+
+## Local Setup & Development
 
 ### 1. Prerequisites
 - Node.js (18.16.0 or later)
 - npm
 
-### 2. Setup & Run Web App
+### 2. Install & Run Web App
 ```bash
 # In the web folder
 cd web
 npm install
 
-# Run development server
+# Start development server
 npm run dev
 ```
-
-Visit `http://localhost:3000`. If unconfigured, the app runs using local `.local-storage/` on disk without requiring any external accounts.
+Open `http://localhost:3000` in your browser. Create an account or sign in.
 
 ### 3. Run Automated Tests
 ```bash
 cd web
 npm test
 ```
+Runs the full test suite including:
+- Password hashing & salt verification
+- HMAC token signing & tamper rejection
+- Single-use pairing code consumption & status tracking
+- Strict user isolation (User A cannot access or download User B's transfers)
+- Automatic lazy expiration cleanup
 
-### 4. Production Build & Typecheck
+### 4. Build Web App for Production
 ```bash
 cd web
 npm run typecheck
@@ -99,31 +123,20 @@ npm run build
 
 ---
 
-## Production Deployment (Vercel)
+## iOS App Setup & Building
 
-1. Push this repository to GitHub.
-2. In Vercel, import the repository and set the **Root Directory** to `web`.
-3. In the Vercel project dashboard, go to the **Storage** tab and create a **Blob** store.
-4. Vercel will automatically inject `BLOB_READ_WRITE_TOKEN`.
-5. Add the following environment variables:
-   - `TRANSFER_AUTH_SECRET`: A secure random 32+ character string.
-   - `NEXT_PUBLIC_APP_URL`: Your Vercel production URL (e.g. `https://your-transfer-app.vercel.app`).
-   - `TRANSFER_EXPIRATION_HOURS`: `24` (or your preferred expiration window).
-
----
-
-## iOS Build & GitHub Actions IPA Setup
-
-The native iOS app is built on macOS GitHub Actions runners, so you do not need Xcode on your Windows development machine.
-
-### GitHub Secrets for Code Signing:
-Add these repository secrets in **Settings -> Secrets and variables -> Actions**:
-
-| Secret Name | Description |
-|---|---|
-| `BUILD_CERTIFICATE_BASE64` | Base64-encoded Apple Distribution / Development `.p12` certificate |
-| `P12_PASSWORD` | Password for the `.p12` file |
-| `BUILD_PROVISION_PROFILE_BASE64` | Base64-encoded `.mobileprovision` file for `com.transfer.app` |
-| `KEYCHAIN_PASSWORD` | Temporary password used to unlock runner keychain |
-
-When these secrets are provided, every push or manual workflow dispatch will build and export `TransferApp.ipa` and upload it to the GitHub Actions Artifacts tab for instant installation via Apple Configurator, TestFlight, or AltStore.
+1. **Direct Sideloading / Xcode**:
+   - Open `ios/TransferApp.xcodeproj` in Xcode.
+   - Set your Development Team under Signing & Capabilities.
+   - Deploy `TransferApp` to your iPhone.
+2. **Connecting to your Server**:
+   - In `TransferApp` on iPhone, tap the Settings icon in the top right.
+   - Enter your hosted server URL (e.g. `https://your-vercel-domain.vercel.app`).
+   - Log in with your username/password OR enter the 6-digit pair code shown on your PC dashboard.
+3. **Sharing to PC from any app**:
+   - In Photos or Files, select any photo, video, or document.
+   - Tap **Share** -> Choose **Transfer**.
+   - The file is streamed to your private PC inbox.
+4. **Sending to iPhone from PC**:
+   - Drag and drop files onto the web dropzone.
+   - In `TransferApp` on iPhone, the files appear in "INCOMING". Tap **SHARE** or **GET** to open in native iOS Files or other apps.

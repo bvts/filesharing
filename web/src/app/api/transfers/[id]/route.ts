@@ -10,12 +10,16 @@ interface RouteContext {
 
 export async function GET(req: NextRequest, { params }: RouteContext) {
   const auth = authenticateRequest(req);
-  if (!auth.authenticated || !auth.deviceId) {
+  if (!auth.authenticated || !auth.userId) {
     return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
   }
 
   const transfer = await getTransfer(params.id);
-  if (!transfer || transfer.deviceId !== auth.deviceId) {
+  const isOwner =
+    transfer &&
+    (transfer.userId ? transfer.userId === auth.userId : transfer.deviceId === auth.deviceId || transfer.deviceId === auth.userId);
+
+  if (!transfer || !isOwner) {
     return NextResponse.json({ error: 'Transfer not found or access denied' }, { status: 404 });
   }
 
@@ -24,12 +28,16 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
 
 export async function DELETE(req: NextRequest, { params }: RouteContext) {
   const auth = authenticateRequest(req);
-  if (!auth.authenticated || !auth.deviceId) {
+  if (!auth.authenticated || !auth.userId) {
     return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
   }
 
   const transfer = await getTransfer(params.id);
-  if (!transfer || transfer.deviceId !== auth.deviceId) {
+  const isOwner =
+    transfer &&
+    (transfer.userId ? transfer.userId === auth.userId : transfer.deviceId === auth.deviceId || transfer.deviceId === auth.userId);
+
+  if (!transfer || !isOwner) {
     return NextResponse.json({ error: 'Transfer not found or access denied' }, { status: 404 });
   }
 

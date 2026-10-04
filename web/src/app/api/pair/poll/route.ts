@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { COOKIE_AUTH_NAME, signDeviceToken } from '@/lib/crypto';
+import { COOKIE_AUTH_NAME, signAuthToken } from '@/lib/crypto';
 import { checkPairCodeStatus } from '@/lib/metadata';
 
 export async function GET(req: NextRequest) {
@@ -14,10 +14,12 @@ export async function GET(req: NextRequest) {
   const status = await checkPairCodeStatus(cleanCode);
 
   if (status.claimed && status.deviceId) {
-    const authToken = signDeviceToken(status.deviceId);
+    const effectiveUserId = status.userId || status.deviceId;
+    const authToken = signAuthToken(effectiveUserId, status.deviceId);
     const response = NextResponse.json({
       paired: true,
       deviceId: status.deviceId,
+      userId: effectiveUserId,
       authToken,
     });
 
