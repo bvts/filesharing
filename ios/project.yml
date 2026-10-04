@@ -30,6 +30,8 @@ targets:
         CODE_SIGN_ENTITLEMENTS: TransferApp/TransferApp.entitlements
         GENERATE_INFOPLIST_FILE: NO
         ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
     dependencies:
       - target: ShareExtension
         embed: true
