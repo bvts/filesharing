@@ -1,6 +1,8 @@
 import SwiftUI
+import UIKit
 import PhotosUI
 import UniformTypeIdentifiers
+import CoreTransferable
 
 struct ContentView: View {
     @State private var fromPc: [TransferItem] = []
@@ -60,9 +62,11 @@ struct ContentView: View {
             ) { result in
                 handleFileSelection(result)
             }
-            .onChange(of: selectedPhotoItems) { newItems in
-                if !newItems.isEmpty {
-                    handlePhotosSelection(newItems)
+            .onChange(of: selectedPhotoItems.count) { newCount in
+                if newCount > 0 {
+                    let items = selectedPhotoItems
+                    selectedPhotoItems = []
+                    handlePhotosSelection(items)
                 }
             }
             .onAppear {
@@ -351,12 +355,15 @@ struct ContentView: View {
     @MainActor
     private func presentNativeShareSheet(url: URL) {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        guard let windowScene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first,
-              let rootVC = windowScene.windows.first(where: { $0.isKeyWindow })?.rootViewController ?? windowScene.windows.first?.rootViewController else {
+        guard let windowScene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else {
             return
         }
 
-        var topVC = rootVC
+        let rootVC = windowScene.windows.first(where: { $0.isKeyWindow })?.rootViewController
+            ?? windowScene.windows.first?.rootViewController
+        guard let root = rootVC else { return }
+
+        var topVC = root
         while let presented = topVC.presentedViewController {
             topVC = presented
         }
@@ -443,7 +450,6 @@ struct ContentView: View {
                     uploadStatusText = "UPLOADED \(successCount), FAILED \(failCount)"
                 }
                 isUploading = false
-                selectedPhotoItems = []
                 refresh(silent: true)
             }
 

@@ -18,19 +18,20 @@ import { hashPassword, verifyPassword } from '../src/lib/crypto';
 describe('Transfer Lifecycle, Auth & Isolation Suite', () => {
   it('creates users and rejects duplicate usernames', async () => {
     const { hash, salt } = hashPassword('Secret123');
-    const user = await createUser('testuser_alice', hash, salt);
+    const uname = 'testuser_alice_' + Date.now();
+    const user = await createUser(uname, hash, salt);
 
     assert.ok(user.id);
-    assert.strictEqual(user.username, 'testuser_alice');
+    assert.strictEqual(user.username, uname);
 
-    const fetched = await getUserByUsername('testuser_alice');
+    const fetched = await getUserByUsername(uname);
     assert.ok(fetched);
     assert.strictEqual(fetched?.id, user.id);
     assert.strictEqual(verifyPassword('Secret123', fetched.passwordHash, fetched.salt), true);
 
     // Duplicate username must throw
     await assert.rejects(async () => {
-      await createUser('TestUser_Alice', hash, salt);
+      await createUser(uname.toUpperCase(), hash, salt);
     }, /Username already exists/);
   });
 

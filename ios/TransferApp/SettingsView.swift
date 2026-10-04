@@ -101,7 +101,7 @@ struct SettingsView: View {
                 if let token = TransferApiClient.shared.authToken {
                     req.setValue(token, forHTTPHeaderField: "x-transfer-auth")
                 }
-                let body = ["deviceId": TransferApiClient.shared.deviceId]
+                let body: [String: Any] = ["deviceId": TransferApiClient.shared.deviceId ?? ""]
                 req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
                 let (data, _) = try await URLSession.shared.data(for: req)
